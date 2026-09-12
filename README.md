@@ -57,17 +57,44 @@ buttons point at the legacy direct installers.
 3. **Sideloadly** - the purple **Windows** button is the 64-bit build; the darker "32-bit"
    segment beside it is the alternate you do not want
 
-### 3. Sideload it
+### 3. Enable Developer Mode on the iPhone
 
-1. Plug the iPhone in over USB, unlock it, tap **Trust** on the prompt.
-2. Open Sideloadly, drag `FirstApp-unsigned.ipa` onto it.
-3. Enter your Apple ID. Use your **real password** and then the 2FA code when prompted —
-   an app-specific password will not work here, Sideloadly needs a full sign-in to request
-   a development certificate.
-4. Hit **Start** and wait.
-5. On the iPhone: **Settings → General → VPN & Device Management** → tap your Apple ID →
-   **Trust**. iOS will not launch the app until you do this.
-6. Open **First iOS App** from your home screen.
+**iOS 16 and later will not run a sideloaded app until Developer Mode is on.** Skipping this
+is the most common reason an install fails.
+
+**Settings -> Privacy & Security -> Developer Mode** (at the bottom) -> toggle on -> **Restart**.
+After the phone reboots, unlock it and confirm **Turn On** at the prompt.
+
+If the menu item is not there, it is because the phone has not yet been asked to run a
+development app. Attempt the install once; the failure makes the menu appear.
+
+This is one-time - it persists across reboots and future sideloads.
+
+### 4. Sideload it
+
+Keep the phone **unlocked and on the home screen** for this. A locked screen fails with
+`LOCKDOWN_E_PASSWORD_PROTECTED`, whose "make sure the cable is connected tightly" message is
+misleading - it is the lock state, not the cable.
+
+1. Plug the iPhone in, unlock it, tap **Trust** and enter the passcode.
+2. Open Sideloadly. The phone should appear in the **iDevice** dropdown.
+3. Drag `FirstApp-unsigned.ipa` onto the window.
+4. Enter your Apple ID and press **Start**. Use your real password plus the 2FA code when
+   prompted. If Sideloadly specifically asks for an app-specific password, generate one at
+   [account.apple.com](https://account.apple.com) under Sign-In and Security.
+5. On the phone: **Settings -> General -> VPN & Device Management -> [your Apple ID] -> Trust**.
+   That entry only appears after the install completes, and the app will not launch until you
+   tap it.
+6. Open **First iOS App**.
+
+#### If it fails
+
+| Error | Cause |
+| --- | --- |
+| `LOCKDOWN_E_PASSWORD_PROTECTED` | Phone is locked. Unlock and retry. |
+| Developer Mode prompts | See step 3 above. |
+| Device not in dropdown | Unplug/replug; confirm Apple Mobile Device Service is running. |
+| Untrusted Developer on launch | Step 5 not done yet. |
 
 ### Free-account limits (not our doing — Apple's)
 
