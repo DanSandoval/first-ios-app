@@ -114,6 +114,43 @@ jobs:
           set -euo pipefail
           xcodegen generate --spec project.yml
 
+      # Deliberately placed before the device build: a failing test must stop
+      # the run rather than let a broken .ipa reach the Releases page.
+      #
+      # Tests need a simulator, and the simulator is resolved at runtime
+      # instead of hardcoded. A pinned `-destination "name=iPhone 16"` rots
+      # silently: GitHub reimages macos-15 on its own schedule, and the day the
+      # installed device set changes the workflow starts failing with "Unable
+      # to find a destination" on code that compiles perfectly well. So ask the
+      # runner what it actually has, and take the newest available iPhone on a
+      # runtime that satisfies the app's iOS 18.0 deployment target.
+      - name: Run the unit tests on a simulator
+        run: |
+          set -euo pipefail
+
+          UDID="$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          runtimes = json.load(sys.stdin)["devices"]
+          ios = lambda name: tuple(int(p) for p in name.rsplit("iOS-", 1)[1].split("-"))
+          pairs = [(ios(rt), dev) for rt in runtimes if ".SimRuntime.iOS-" in rt for dev in runtimes[rt]]
+          usable = [(v, d["udid"]) for v, d in pairs if v >= (18, 0) and d.get("isAvailable") and d["name"].startswith("iPhone")]
+          print(max(usable)[1] if usable else "")
+          ')"
+
+          if [ -z "$UDID" ]; then
+            echo "::error::No available iPhone simulator running iOS 18.0 or newer on this runner."
+            echo "Simulators this runner does have:"
+            xcrun simctl list devices available
+            exit 1
+          fi
+
+          echo "Testing on simulator $UDID"
+
+          # No -configuration: the scheme's test action already pins Debug,
+          # which is where ENABLE_TESTABILITY is on and @testable import works.
+          xcodebuild test -project "$APP_NAME.xcodeproj" -scheme "$SCHEME" \
+            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+
       - name: Build for device with signing disabled
         run: |
           set -o pipefail

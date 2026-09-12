@@ -3,7 +3,7 @@ name: FirstApp
 options:
   bundleIdPrefix: com.dansandoval
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "18.0"
   createIntermediateGroups: true
 
 # Project-level settings. Signing is deliberately absent: CI builds unsigned and
@@ -35,6 +35,12 @@ targets:
       path: FirstApp/Info.plist
       properties:
         CFBundleDisplayName: First iOS App
+        # Required by BiometricGate. Face ID without this key does not fail
+        # gracefully - iOS terminates the process on the first evaluation.
+        # Touch ID needs no key, which is why the omission survives testing
+        # on a Touch ID device or the Simulator and only bites on real Face
+        # ID hardware. This string is what the system prompt shows the user.
+        NSFaceIDUsageDescription: Unlock to view your saved API token.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # Required, even empty: without it the app runs letterboxed in
@@ -52,6 +58,24 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
+  # XCTest bundle. The dependency on FirstApp is what makes `@testable import
+  # FirstApp` work: XcodeGen sets TEST_HOST automatically for a unit-test
+  # target that depends on an application, and the bundle.unit-test preset
+  # points BUNDLE_LOADER at it.
+  FirstAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FirstAppTests
+    dependencies:
+      - target: FirstApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dansandoval.firstiosapp.tests
+        # Synthesised plist: a test bundle has nothing to declare, unlike the
+        # app target above, which needs a hand-written one.
+        GENERATE_INFOPLIST_FILE: "YES"
+
 # Declared explicitly rather than relying on implicit scheme generation, because
 # CI passes `-scheme FirstApp` and the build fails outright if it is missing.
 schemes:
@@ -61,6 +85,12 @@ schemes:
         FirstApp: all
     run:
       config: Debug
+    # Debug, not Release: ENABLE_TESTABILITY is on by default only in Debug,
+    # and `@testable import` needs it.
+    test:
+      config: Debug
+      targets:
+        - FirstAppTests
     profile:
       config: Release
     analyze:
