@@ -285,8 +285,11 @@ final class APIClientTests: XCTestCase {
 
         // Note: HTTPURLResponse may canonicalise header capitalisation, so
         // RateLimit's header lookup has to be case-insensitive.
+        // Read the actor's property into a local first: XCTUnwrap takes an
+        // autoclosure, which is not async, so `await` cannot appear inside it.
+        let captured = await client.lastRateLimit
         let rateLimit = try XCTUnwrap(
-            await client.lastRateLimit,
+            captured,
             "Rate-limit headers on the response should have been captured"
         )
         XCTAssertEqual(rateLimit.limit, 5000)
@@ -319,7 +322,8 @@ final class APIClientTests: XCTestCase {
 
         // Preserved, not cleared. One unrelated header-less endpoint must not
         // make the whole budget read as unknown.
-        let rateLimit = try XCTUnwrap(await client.lastRateLimit)
+        let captured = await client.lastRateLimit
+        let rateLimit = try XCTUnwrap(captured)
         XCTAssertEqual(rateLimit.remaining, 4987)
     }
 
