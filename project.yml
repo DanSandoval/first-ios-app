@@ -1,0 +1,69 @@
+name: FirstApp
+
+options:
+  bundleIdPrefix: com.dansandoval
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+# Project-level settings. Signing is deliberately absent: CI builds unsigned and
+# passes CODE_SIGNING_ALLOWED=NO / CODE_SIGNING_REQUIRED=NO on the command line.
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+
+targets:
+  FirstApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: FirstApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.dansandoval.firstiosapp
+        # No spaces: the artifact is FirstApp.app so CI paths stay space-free.
+        # The home-screen name comes from CFBundleDisplayName below.
+        PRODUCT_NAME: FirstApp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_EMIT_LOC_STRINGS: "NO"
+    # Explicit plist: do not add GENERATE_INFOPLIST_FILE or INFOPLIST_KEY_* here.
+    info:
+      path: FirstApp/Info.plist
+      properties:
+        CFBundleDisplayName: First iOS App
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Required, even empty: without it the app runs letterboxed in
+        # iPhone-compatibility mode instead of filling a modern screen.
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+# Declared explicitly rather than relying on implicit scheme generation, because
+# CI passes `-scheme FirstApp` and the build fails outright if it is missing.
+schemes:
+  FirstApp:
+    build:
+      targets:
+        FirstApp: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

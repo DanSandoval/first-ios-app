@@ -1,0 +1,461 @@
+# iOS Build
+#
+# Two jobs, deliberately separated:
+#
+#   build-unsigned  Runs on every push/PR. Produces an UNSIGNED .ipa that you
+#                   download from the run's "Artifacts" section and sideload
+#                   onto your iPhone from Windows with Sideloadly + a free
+#                   Apple ID. This is the job that matters today.
+#
+#   testflight      Dormant. Turns on the day you pay for an Apple Developer
+#                   account, by setting one repository variable and adding
+#                   seven secrets. No YAML rewriting required.
+#
+# ---------------------------------------------------------------------------
+# Why an unsigned build works at all
+# ---------------------------------------------------------------------------
+# Compiling an iOS app and signing an iOS app are two separate operations.
+# The compiler does not care who you are; it turns Swift into a Mach-O binary
+# and copies your assets into a `FirstApp.app` bundle. Code signing is a step
+# that runs *after* that, sealing the bundle with an Apple-issued certificate
+# so a device will agree to run it.
+#
+# CODE_SIGNING_ALLOWED=NO tells Xcode to skip that sealing step entirely, so
+# the build succeeds on a runner that holds no certificates whatsoever. The
+# resulting .app is complete and correct, just unsealed. Sideloadly then
+# re-signs it on your Windows PC using a free Apple ID -- exactly the same
+# operation Xcode would perform on a Mac. (Free-Apple-ID signatures expire
+# after 7 days, so you re-run Sideloadly weekly. A paid account, and the
+# testflight job below, removes that limit.)
+#
+# ---------------------------------------------------------------------------
+# Why the .ipa is just a zip containing a folder named Payload
+# ---------------------------------------------------------------------------
+# An .ipa is not a special format. It is an ordinary zip archive that must
+# contain exactly one top-level directory named `Payload`, which holds your
+# `YourApp.app` bundle. Apple's tooling, TestFlight, and every sideloader
+# look for that shape and nothing else. So `zip -qry FirstApp-unsigned.ipa
+# Payload` produces a genuine .ipa.
+#
+# `xcodebuild -exportArchive` normally builds this for you, but it refuses to
+# run without a signing identity, which is precisely what we do not have.
+# Hence the manual zip. The `-y` flag is not optional: an .app bundle contains
+# internal symlinks, and zip would otherwise follow them and inflate/corrupt
+# the bundle.
+
+name: iOS Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege: this workflow only ever reads the repository. It never
+# pushes commits, comments on PRs, or publishes packages.
+permissions:
+  contents: read
+
+# One in-flight run per branch. Pushing twice in a row cancels the first run
+# rather than paying for two macOS runners. Note this can also cancel an
+# in-progress TestFlight upload if you push again immediately -- if that ever
+# bites, set cancel-in-progress to false.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: FirstApp
+  SCHEME: FirstApp
+  # Must match the bundle identifier in project.yml. Used only by the
+  # TestFlight export plist, which maps bundle ID -> provisioning profile.
+  BUNDLE_ID: com.dansandoval.firstiosapp
+
+jobs:
+  # =========================================================================
+  # JOB 1 -- Unsigned .ipa for Sideloadly
+  # =========================================================================
+  build-unsigned:
+    name: Build unsigned .ipa
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen
+
+      # The icon must exist before xcodegen runs, because the generated
+      # project references Assets.xcassets and the build will fail on a
+      # missing AppIcon. make-icon.swift writes a PNG but does not create
+      # directories, so mkdir -p first. Doing the mkdir here (rather than
+      # relying on the asset catalog being committed with the folder) keeps
+      # this step order-independent and safe to re-run.
+      - name: Generate the app icon
+        run: |
+          set -euo pipefail
+          mkdir -p "$APP_NAME/Assets.xcassets/AppIcon.appiconset"
+          swift Tools/make-icon.swift "$APP_NAME/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+
+      # The .xcodeproj is not committed to git -- it is a large, merge-hostile
+      # generated file. project.yml is the source of truth and XcodeGen
+      # rebuilds the project here on every run.
+      - name: Generate the Xcode project
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec project.yml
+
+      - name: Build for device with signing disabled
+        run: |
+          set -o pipefail
+          xcodebuild -project "$APP_NAME.xcodeproj" -scheme "$SCHEME" -configuration Release \
+            -sdk iphoneos -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO build
+
+      # Hand-roll the .ipa. See the header comment for why this is a plain zip.
+      - name: Package the unsigned .ipa
+        run: |
+          set -euo pipefail
+
+          APP_PATH="build/Build/Products/Release-iphoneos/$APP_NAME.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::Build succeeded but no app bundle was found at $APP_PATH"
+            echo "Contents of build/Build/Products (if it exists):"
+            ls -R build/Build/Products || echo "  (no build/Build/Products directory)"
+            exit 1
+          fi
+
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+
+          # -q quiet, -r recursive, -y store symlinks as symlinks instead of
+          # following them (an .app bundle relies on internal symlinks).
+          zip -qry "$APP_NAME-unsigned.ipa" Payload
+
+          echo "Packaged unsigned .ipa:"
+          ls -lh "$APP_NAME-unsigned.ipa"
+
+      - name: Upload the unsigned .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-unsigned-ipa
+          path: ${{ env.APP_NAME }}-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+  # =========================================================================
+  # JOB 2 -- TestFlight (dormant until you have a paid Apple Developer account)
+  # =========================================================================
+  #
+  # TO TURN THIS ON:
+  #
+  #   1. Repository Settings -> Secrets and variables -> Actions -> Variables
+  #      Add variable  ENABLE_TESTFLIGHT = true
+  #
+  #   2. Same page, Secrets tab. Add all seven:
+  #
+  #      APPLE_CERT_P12_BASE64
+  #          Your Apple Distribution certificate + private key exported as a
+  #          .p12, then base64-encoded.
+  #          macOS:    base64 -i dist.p12 | pbcopy
+  #          Windows:  certutil -encode dist.p12 dist.txt   (strip header/footer)
+  #
+  #      APPLE_CERT_PASSWORD
+  #          The password you set when exporting that .p12.
+  #
+  #      APPLE_PROVISIONING_PROFILE_BASE64
+  #          An App Store distribution .mobileprovision for BUNDLE_ID,
+  #          base64-encoded the same way.
+  #
+  #      APPLE_TEAM_ID
+  #          The 10-character team ID from developer.apple.com -> Membership.
+  #
+  #      APPSTORE_API_KEY_ID
+  #          App Store Connect -> Users and Access -> Integrations -> App Store
+  #          Connect API. The key ID, e.g. ABC123DEF4.
+  #
+  #      APPSTORE_API_ISSUER_ID
+  #          The issuer UUID shown on that same page.
+  #
+  #      APPSTORE_API_PRIVATE_KEY
+  #          The AuthKey_<KEYID>.p8 file you download once when creating the
+  #          key. Paste either the raw PEM text or its base64 encoding -- the
+  #          upload step below detects and handles both.
+  #
+  # Nothing else changes. Do not edit this job to enable it.
+  testflight:
+    name: Archive and upload to TestFlight
+    needs: build-unsigned
+    # `vars` IS available in a job-level `if:`; `secrets` is NOT. Per GitHub's
+    # context-availability table, jobs.<job_id>.if allows only:
+    #   github, needs, vars, inputs
+    # That is exactly why the on/off switch is a repository VARIABLE and not a
+    # secret -- gating on `secrets.SOMETHING != ''` here would silently never
+    # evaluate true.
+    if: vars.ENABLE_TESTFLIGHT == 'true'
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen
+
+      - name: Generate the app icon
+        run: |
+          set -euo pipefail
+          mkdir -p "$APP_NAME/Assets.xcassets/AppIcon.appiconset"
+          swift Tools/make-icon.swift "$APP_NAME/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+
+      - name: Generate the Xcode project
+        run: |
+          set -euo pipefail
+          xcodegen generate --spec project.yml
+
+      # -----------------------------------------------------------------
+      # Signing assets go into a THROWAWAY keychain, never the login one.
+      #
+      # Every secret arrives through `env:` below. They are never written
+      # into the shell script text as ${{ secrets.* }}, because GitHub
+      # substitutes those before the shell ever sees them -- which means the
+      # value can leak through `set -x`, a syntax error echoing the failing
+      # line, or a core dump. As environment variables they stay out of the
+      # script source entirely.
+      # -----------------------------------------------------------------
+      - name: Import signing certificate and provisioning profile
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/signing.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+
+          # A fresh random password per run. Never hardcoded, never reused,
+          # and masked so it cannot surface in the log.
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+
+          printf '%s' "$APPLE_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          printf '%s' "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          chmod 600 "$CERT_PATH" "$PROFILE_PATH"
+
+          # Dedicated keychain in RUNNER_TEMP, which GitHub wipes when the job
+          # ends. -lut 1800 auto-locks it after 30 minutes idle so it cannot
+          # sit unlocked if a later step hangs.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 1800 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # -T grants exactly one binary (codesign) access. Deliberately not
+          # -A, which would grant every process on the machine access.
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERT_PASSWORD" \
+            -f pkcs12 \
+            -t cert \
+            -T /usr/bin/codesign
+
+          # Without this, codesign blocks on a GUI "allow access" prompt that
+          # nobody can click on a headless runner. Output redirected to
+          # /dev/null because it echoes the keychain contents.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+
+          # PREPEND to the user search list rather than replacing it. Replacing
+          # it would drop login.keychain-db and break unrelated tooling.
+          ORIGINAL_KEYCHAINS="$(security list-keychains -d user | tr -d '"' | tr -s '[:space:]' ' ')"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $ORIGINAL_KEYCHAINS
+
+          # The export step needs the profile's UUID and name, which live
+          # inside the CMS-signed .mobileprovision.
+          security cms -D -i "$PROFILE_PATH" -o "$PROFILE_PLIST"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")"
+          echo "Installing provisioning profile '$PROFILE_NAME' ($PROFILE_UUID)"
+
+          # Xcode 15 and earlier read ~/Library/MobileDevice/Provisioning
+          # Profiles; Xcode 16 moved to ~/Library/Developer/Xcode/UserData.
+          # Install into both so this does not break on a runner image bump.
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" \
+                     "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$PROFILE_PATH" "$dir/$PROFILE_UUID.mobileprovision"
+          done
+
+          # Decoded secrets are gone from disk the moment they are consumed.
+          rm -f "$CERT_PATH" "$PROFILE_PATH" "$PROFILE_PLIST"
+
+          # Hand the later steps what they need. KEYCHAIN_PASSWORD is our own
+          # per-run random string, already masked above; GITHUB_ENV is not
+          # written to the log.
+          {
+            echo "KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+            echo "PROVISIONING_PROFILE_UUID=$PROFILE_UUID"
+            echo "PROVISIONING_PROFILE_NAME=$PROFILE_NAME"
+          } >> "$GITHUB_ENV"
+
+      - name: Archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # "Apple Distribution" is the modern App Store certificate name. If
+          # your team still uses a legacy cert, change this to
+          # "iPhone Distribution".
+          xcodebuild archive \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
+
+      - name: Export the signed .ipa
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Xcode 15.3 renamed the App Store export method from "app-store"
+          # to "app-store-connect". signingStyle manual means "use exactly the
+          # profile I name here", with no phoning home to Apple mid-build.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${PROVISIONING_PROFILE_UUID}</string>
+            </dict>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>destination</key>
+            <string>export</string>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/$APP_NAME.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+
+          echo "Exported:"
+          ls -lh "$RUNNER_TEMP/export"
+
+      - name: Upload to TestFlight
+        env:
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # altool does not take a key path. It looks for the key by name in
+          # ~/private_keys (and a couple of other fixed locations), so the
+          # filename must be exactly AuthKey_<KEYID>.p8.
+          mkdir -p "$HOME/private_keys"
+          chmod 700 "$HOME/private_keys"
+          KEY_FILE="$HOME/private_keys/AuthKey_${APPSTORE_API_KEY_ID}.p8"
+
+          # Accept the secret either as raw PEM or base64-encoded PEM, since
+          # both are common ways to paste a .p8 into GitHub.
+          case "$APPSTORE_API_PRIVATE_KEY" in
+            -----BEGIN*)
+              printf '%s\n' "$APPSTORE_API_PRIVATE_KEY" > "$KEY_FILE"
+              ;;
+            *)
+              printf '%s' "$APPSTORE_API_PRIVATE_KEY" | base64 --decode > "$KEY_FILE"
+              ;;
+          esac
+          chmod 600 "$KEY_FILE"
+
+          IPA="$RUNNER_TEMP/export/$APP_NAME.ipa"
+          if [ ! -f "$IPA" ]; then
+            echo "::error::Export produced no .ipa at $IPA"
+            ls -lR "$RUNNER_TEMP/export" || true
+            rm -f "$KEY_FILE"
+            exit 1
+          fi
+
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "$APPSTORE_API_KEY_ID" \
+            --apiIssuer "$APPSTORE_API_ISSUER_ID"
+
+          rm -f "$KEY_FILE"
+
+      # if: always() -- this runs even when the archive, export, or upload
+      # failed. A failed run must never leave a certificate, a private key, or
+      # an unlocked keychain behind on the runner.
+      - name: Clean up signing material
+        if: always()
+        run: |
+          # No -e here: every line must get a chance to run.
+          set -uo pipefail
+
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "${KEYCHAIN_PATH:-}" ]; then
+            # Also removes the keychain from the search list.
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
+          if [ -n "${PROVISIONING_PROFILE_UUID:-}" ]; then
+            rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/$PROVISIONING_PROFILE_UUID.mobileprovision" \
+                  "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$PROVISIONING_PROFILE_UUID.mobileprovision"
+          fi
+
+          rm -rf "$HOME/private_keys"
+          rm -f "$RUNNER_TEMP"/*.p12 \
+                "$RUNNER_TEMP"/*.p8 \
+                "$RUNNER_TEMP"/*.mobileprovision \
+                "$RUNNER_TEMP"/profile.plist \
+                "$RUNNER_TEMP"/ExportOptions.plist
+
+          echo "Signing material removed."
