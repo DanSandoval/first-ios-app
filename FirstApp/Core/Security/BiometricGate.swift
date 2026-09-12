@@ -106,13 +106,17 @@ final class BiometricGate {
     /// has none enrolled or usable. Passcode-only devices return `nil` here and
     /// still return `true` from ``isAvailable``.
     ///
-    /// - Note: `LABiometryType.opticID` is not declared available on iOS, so it
-    ///   is not matched explicitly; it and anything a future OS adds fall
-    ///   through to `nil`, and the caller shows generic "Unlock" wording.
+    /// - Note: Anything a future OS adds falls through to `nil`, and the caller
+    ///   shows generic "Unlock" wording rather than naming a modality it cannot
+    ///   describe.
     var biometryName: String? {
         switch biometryType {
         case .faceID: return "Face ID"
         case .touchID: return "Touch ID"
+        // Declared on iOS even though the hardware is not; omitting it makes
+        // the switch non-exhaustive, which @unknown default does not cover
+        // because that only absorbs cases added in a *future* SDK.
+        case .opticID: return "Optic ID"
         case .none: return nil
         @unknown default: return nil
         }

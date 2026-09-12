@@ -62,6 +62,11 @@ struct PerfTrace: Sendable {
     /// The underlying emitter.
     private let signposter: OSSignposter
 
+    /// Backs ``isEnabled`` only. `OSSignposter` exposes no way to ask
+    /// whether anything is recording; `signpostsEnabled` is a property of
+    /// `OSLog`, so we keep a matching handle purely for that query.
+    private let log: OSLog
+
     /// Creates a tracer.
     ///
     /// - Parameters:
@@ -70,6 +75,7 @@ struct PerfTrace: Sendable {
     ///   - category: The Instruments lane these intervals group under.
     init(subsystem: String = AppLog.subsystem, category: String = "Performance") {
         self.signposter = OSSignposter(subsystem: subsystem, category: category)
+        self.log = OSLog(subsystem: subsystem, category: category)
     }
 
     /// Whether anything is currently recording these signposts.
@@ -77,7 +83,7 @@ struct PerfTrace: Sendable {
     /// Check this before doing work that exists *only* to produce a signpost
     /// message. The signpost calls themselves already short-circuit, so there is
     /// no need to guard ordinary ``measure(_:_:)`` calls with it.
-    var isEnabled: Bool { signposter.signpostsEnabled }
+    var isEnabled: Bool { log.signpostsEnabled }
 
     // MARK: - Intervals
 

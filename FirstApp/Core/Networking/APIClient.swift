@@ -179,11 +179,13 @@ actor APIClient {
     /// Sleeps between attempts, preferring the server's `Retry-After`.
     private func wait(after error: APIError, attempt: Int) async throws {
         let seconds: TimeInterval
-        if case .rateLimited(let retryAfter) = error,
-           let retryAfter, retryAfter.isFinite, retryAfter > 0 {
+        // `.some` matches only a 429 that actually carried a usable
+        // `Retry-After`; a 429 without one falls through to the backoff.
+        if case .rateLimited(.some(let serverDelay)) = error,
+           serverDelay.isFinite, serverDelay > 0 {
             // The server told us when the window reopens; guessing shorter just
             // spends an attempt on a guaranteed second 429.
-            seconds = retryAfter
+            seconds = serverDelay
         } else {
             seconds = retryPolicy.delay(forAttempt: attempt)
         }
