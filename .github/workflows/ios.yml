@@ -48,6 +48,9 @@ name: iOS Build
 on:
   push:
     branches: [main]
+    # A four-minute macOS build and a republished release are a lot to spend on
+    # a typo fix. Code changes still trigger normally.
+    paths-ignore: ["**.md", "LICENSE", ".gitignore"]
   pull_request:
   workflow_dispatch:
 

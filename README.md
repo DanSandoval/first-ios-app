@@ -6,19 +6,43 @@ from Windows.
 
 ## What the app does
 
-| Tab | Feature | Concept it demonstrates |
+**Requires iOS 18 or later.**
+
+| Tab | Feature | Concept |
 | --- | --- | --- |
-| **Home** | Title reads **First iOS App** | `.navigationTitle` / large titles |
+| **Home** | Title reads **First iOS App** | large navigation titles |
 | **Home** | Button that puts **Hello, World!** on screen | `@State`, `withAnimation`, transitions |
 | **Home** | Button that pushes to a **Second Page** | `NavigationStack` + `NavigationLink` |
-| **Home** | Tap counter (+ / −) | `@State` and animated numeric text |
-| **Home** | Name field + "Excited" toggle with live output | Two-way `$` bindings |
-| **List** | Searchable list of iOS concepts → detail pages | `List`, `.searchable`, `navigationDestination` |
-| **Device** | Haptic buzz buttons | `UIFeedbackGenerator` — real hardware only |
-| **Device** | Model, iOS version, screen size, app version | Reading device info |
-| **Device** | Launch count + nickname that survive a force-quit | `@AppStorage` / `UserDefaults` |
+| **Home** | Tap counter, name field, toggle | two-way `$` bindings |
+| **List** | Searchable list of iOS concepts | `List`, `.searchable`, `navigationDestination` |
+| **Search** | Live GitHub repo search | the whole networking stack, end to end |
+| **Device** | Haptics, device info, persisted values | hardware feedback, `@AppStorage` |
 
-Dark mode, SF Symbols icons, a generated app icon, and a proper launch screen are all wired up.
+## Reusable modules
+
+Everything under `FirstApp/Core/` is written to be copied into another project.
+
+| Module | What it gives you |
+| --- | --- |
+| `Core/Networking` | Actor-based API client, typed `APIError`, exponential backoff with full jitter, rate-limit parsing, injectable transport for testing |
+| `Core/Security` | Keychain wrapper (`AfterFirstUnlockThisDeviceOnly`, upsert, excluded from backups), `TokenStore`, Face ID gate |
+| `Core/Persistence` | Actor-backed disk cache with TTL and a network-first-fallback-to-cache policy |
+| `Core/Diagnostics` | OSLog wrappers that redact tokens, URL query values and auth headers |
+| `Core/DesignSystem` | 4pt spacing scale, semantic palette, button styles, Dynamic Type throughout |
+| `Core/Connectivity` | `NWPathMonitor` observable with `isExpensive` / `isConstrained`, offline banner |
+| `Core/State` | `Loadable` plus loading / empty / error views |
+
+51 unit tests run on a simulator in CI **before** the device build, so a failing
+test blocks the `.ipa`.
+
+Three decisions worth knowing about, each a bug that would otherwise surface late:
+
+- Query strings encode a literal `+` as `%2B`. `URLComponents` is spec-correct to
+  leave it bare, but any server that form-decodes reads `a+b` back as `a b`, silently.
+- `BiometricGate` builds a fresh `LAContext` per attempt. A reused context reports
+  success with no prompt and no biometric check.
+- Cache keys are SHA-256 hashed. A raw key containing a path separator is a
+  traversal bug.
 
 ## Getting it on your iPhone
 
