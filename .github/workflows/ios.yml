@@ -148,8 +148,15 @@ jobs:
 
           # No -configuration: the scheme's test action already pins Debug,
           # which is where ENABLE_TESTABILITY is on and @testable import works.
+          # Signing is deliberately NOT disabled here, unlike the device
+          # build below. Keychain access requires an application-identifier
+          # entitlement even in the Simulator, and CODE_SIGNING_ALLOWED=NO
+          # strips it -- every KeychainStore test then fails with
+          # errSecMissingEntitlement (-34018). Ad-hoc signing ("-") needs no
+          # certificate and no team, and does produce the entitlement.
           xcodebuild test -project "$APP_NAME.xcodeproj" -scheme "$SCHEME" \
-            -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+            -destination "id=$UDID" -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO
 
       - name: Build for device with signing disabled
         run: |
