@@ -200,10 +200,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          # --repo is required: this job deliberately does not check out the
+          # repository (it only needs the one artifact), so gh has no local
+          # git remote to infer the target repo from.
+
           # Delete and recreate rather than editing in place, so the `latest`
           # tag always points at the commit that actually produced the build
           # sitting behind it. --cleanup-tag removes the stale tag too.
-          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
 
           ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/latest/$APP_NAME-unsigned.ipa"
 
@@ -225,6 +229,7 @@ jobs:
           EOF
 
           gh release create latest "$APP_NAME-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Latest build" \
             --target "$GITHUB_SHA" \
             --prerelease \
