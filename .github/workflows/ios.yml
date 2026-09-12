@@ -156,7 +156,88 @@ jobs:
           if-no-files-found: error
 
   # =========================================================================
-  # JOB 2 -- TestFlight (dormant until you have a paid Apple Developer account)
+  # JOB 2 -- Publish the .ipa to a GitHub Release
+  # =========================================================================
+  #
+  # This job exists to make the wireless install path work.
+  #
+  # An Actions artifact is a poor fit for a phone: downloading one requires
+  # being signed in to GitHub, and it always arrives wrapped in an extra .zip
+  # that mobile Safari will not open usefully. A Release asset has neither
+  # problem -- it is a plain, public, direct download. So you can open the URL
+  # in Safari on the iPhone, save the .ipa into Files, and hand it to AltStore
+  # without the PC being involved at all.
+  #
+  # The URL is stable across every build:
+  #   https://github.com/<owner>/<repo>/releases/download/latest/FirstApp-unsigned.ipa
+  #
+  # Runs on ubuntu rather than macOS deliberately: this job only moves a file
+  # from one place to another, and Linux runners bill at 1x instead of 10x.
+  release:
+    name: Publish .ipa to Releases
+    needs: build-unsigned
+    # Real pushes to main only. A pull request must never publish a release --
+    # a PR from a fork could otherwise overwrite the download everyone uses.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Scoped to this job, not the workflow. The build job keeps the
+    # workflow-level `contents: read`, so nothing that compiles code holds
+    # permission to write back to the repository.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the .ipa built by the previous job
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.APP_NAME }}-unsigned-ipa
+
+      - name: Replace the rolling "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Delete and recreate rather than editing in place, so the `latest`
+          # tag always points at the commit that actually produced the build
+          # sitting behind it. --cleanup-tag removes the stale tag too.
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+
+          ASSET_URL="https://github.com/$GITHUB_REPOSITORY/releases/download/latest/$APP_NAME-unsigned.ipa"
+
+          # Unquoted heredoc so the variables expand. No backticks anywhere in
+          # the notes -- the shell would read them as command substitution.
+          cat > release-notes.md <<EOF
+          Unsigned .ipa built from commit ${GITHUB_SHA:0:7}.
+
+          **On your iPhone:** open this page in Safari on the phone, download the
+          .ipa below, then open it with AltStore. No cable needed once AltStore
+          is set up.
+
+          **On Windows:** download it and sideload with Sideloadly over USB.
+
+          Direct link: $ASSET_URL
+
+          The build is unsigned by design -- GitHub's runners hold no Apple
+          identity, so you supply the signature at install time.
+          EOF
+
+          gh release create latest "$APP_NAME-unsigned.ipa" \
+            --title "Latest build" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --notes-file release-notes.md
+
+          echo "Published: $ASSET_URL"
+          {
+            echo "### Download on your iPhone"
+            echo "$ASSET_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # JOB 3 -- TestFlight (dormant until you have a paid Apple Developer account)
   # =========================================================================
   #
   # TO TURN THIS ON:

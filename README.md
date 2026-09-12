@@ -24,21 +24,38 @@ Dark mode, SF Symbols icons, a generated app icon, and a proper launch screen ar
 
 ### 1. Grab the build
 
-Every push to `main` triggers the build. Go to the repo's **Actions** tab → newest
-**iOS Build** run → scroll to **Artifacts** → download **`FirstApp-unsigned-ipa`**.
-Unzip it; inside is `FirstApp-unsigned.ipa`.
+Every push to `main` builds and publishes. Two ways to get it:
 
-The `.ipa` is deliberately **unsigned** — GitHub's runner has no access to your Apple
-identity, so it can't sign for your device. You supply the signature locally in step 3.
+**From your phone (easiest)** - open the
+[latest release](../../releases/tag/latest) in Safari *on the iPhone* and download
+`FirstApp-unsigned.ipa`. It is a plain public file, so no GitHub login and no zip
+wrapper. The URL never changes:
+
+```
+https://github.com/DanSandoval/first-ios-app/releases/download/latest/FirstApp-unsigned.ipa
+```
+
+**From Windows** - same link in a desktop browser, or the **Actions** tab -> newest
+**iOS Build** run -> **Artifacts** -> `FirstApp-unsigned-ipa` (that one arrives zipped).
+
+The `.ipa` is deliberately **unsigned** - GitHub's runners hold no Apple identity, so they
+cannot sign for your device. You supply the signature at install time.
 
 ### 2. One-time Windows setup
 
-1. **iTunes** — install from [apple.com](https://www.apple.com/itunes/download/win64), **not**
-   the Microsoft Store version. Only the apple.com installer ships the USB device drivers
-   sideloading needs.
-2. **iCloud for Windows** — also from [apple.com](https://support.apple.com/en-us/HT204283),
-   again not the Store version.
-3. **Sideloadly** — from [sideloadly.io](https://sideloadly.io).
+Sideloadly needs the **web (desktop) builds** of iTunes and iCloud, **not** the Microsoft
+Store versions. If the Store ones are installed, uninstall them first or signing fails.
+Take **64-bit** throughout - Windows 11 has no 32-bit edition.
+
+Apple's own iCloud support page now links only to the Microsoft Store build, which does not
+work here. Get both installers from the **"Before you install"** dialog on
+[sideloadly.io](https://sideloadly.io) instead - its **Web iTunes 64-bit** and **Web iCloud**
+buttons point at the legacy direct installers.
+
+1. **iTunes** (web version) - ships the USB device drivers sideloading depends on
+2. **iCloud** (web version)
+3. **Sideloadly** - the purple **Windows** button is the 64-bit build; the darker "32-bit"
+   segment beside it is the alternate you do not want
 
 ### 3. Sideload it
 

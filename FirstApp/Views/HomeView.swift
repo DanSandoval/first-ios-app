@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// The first tab. Everything here is a self-contained demo of one SwiftUI idea:
